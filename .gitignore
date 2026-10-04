@@ -1,0 +1,7 @@
+venv/
+vector_db/
+__pycache__/
+*.pyc
+.env
+data/calendar_events.json
+data/chat_memory.json

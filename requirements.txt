@@ -11,3 +11,4 @@ python-dotenv
 # Person 3 additions
 langgraph>=0.2.0
 pytest>=8.0.0
+streamlit>=1.38.0

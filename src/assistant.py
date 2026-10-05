@@ -121,7 +121,10 @@ def _exec_rag(state: AssistantState) -> AssistantState:
     """
     try:
         from src.rag_chain import ask_question
-        result = ask_question(state["message"])
+        result = ask_question(
+            state["message"],
+            chat_history=state.get("history", []),
+        )
         state["reply"] = result.get("answer", "I could not retrieve an answer.")
         state["sources"] = result.get("sources", [])
     except RuntimeError as exc:

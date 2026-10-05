@@ -1,108 +1,162 @@
-# AI Academic Assistant - Knowledge Base Module (Person 1)
+# AI-Based College Academic Assistant
 
-Turns college PDFs into a searchable ChromaDB vector database.
+A college-focused assistant that answers questions from supplied academic PDFs, creates study plans, calculates CGPA, and manages academic calendar events. The Streamlit interface calls a small Python adapter, which routes requests through the existing LangGraph workflow and backend modules.
 
-    PDFs -> load + clean -> chunks -> embeddings -> ChromaDB -> retriever (for Person 2)
+## Architecture
 
-## Setup (Windows)
+```mermaid
+flowchart LR
+    subgraph Build[Document indexing]
+        PDFs[College PDFs] --> Loader[PDF loading and cleaning]
+        Loader --> Splitter[Text chunking]
+        Splitter --> Embedder[Hugging Face embeddings]
+        Embedder --> Chroma[(Chroma vector database)]
+    end
 
-    python -m venv venv
-    venv\Scripts\activate
-    python -m pip install -r requirements.txt
+    Student[Student] --> UI[Streamlit UI]
+    UI --> API[backend_api.py]
+    API --> LoadHistory[LangGraph: load_history]
+    LoadHistory --> Classify[LangGraph: classify]
+    Classify -->|document question| RAGNode[LangGraph: rag]
+    Classify -->|study plan| PlanNode[LangGraph: plan]
+    Classify -->|CGPA| CgpaNode[LangGraph: cgpa]
+    Classify -->|calendar| CalendarNode[LangGraph: calendar]
 
-## Build the knowledge base
+    RAGNode --> Retriever[LangChain retriever and RAG context]
+    Chroma --> Retriever
+    Retriever --> Prompt[Grounded prompt with retrieved passages]
+    Prompt --> LLM[OpenAI-compatible chat model]
+    LLM --> RAGNode
 
-1. Put the college PDFs in `data/documents/`.
-2. Run (this wipes and rebuilds the collection, so it is safe to re-run):
+    PlanNode --> Planner[src/planner.py]
+    CgpaNode --> Tools[src/tools.py]
+    CalendarNode --> Tools
+    RAGNode --> SaveHistory[LangGraph: save_history]
+    PlanNode --> SaveHistory
+    CgpaNode --> SaveHistory
+    CalendarNode --> SaveHistory
+    SaveHistory --> API
+    API --> UI
+```
 
-       python src\build_vector_db.py
+LangChain components handle PDF loading, splitting, embeddings, Chroma access, and retrieval. The RAG generation call uses the configured OpenAI-compatible chat API. LangGraph routes requests to RAG, planning, CGPA, or calendar nodes; it does not currently include a separate review node.
 
-3. Verify retrieval:
+## Setup
 
-       python src\test_retrieval.py
+Run these commands from the repository root in PowerShell:
 
-   Add a test line to `TESTS` in `src/test_retrieval.py` for every new document.
+```powershell
+python -m venv venv
+venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+```
 
-## Project layout
+Edit `.env` and configure:
 
-| File | Purpose |
-|---|---|
-| `src/config.py` | Paths, collection name, embedding model, chunk size |
-| `src/document_loader.py` | Loads PDFs, cleans text, keeps `source` and `page` metadata |
-| `src/text_splitter.py` | Splits pages into 1000-character chunks (200 overlap) |
-| `src/embeddings.py` | Embedding model (`all-MiniLM-L6-v2`) |
-| `src/build_vector_db.py` | Builds the ChromaDB collection in `vector_db/` |
-| `src/retriever.py` | Interface for Person 2 |
-| `src/test_retrieval.py` | Automated retrieval checks |
+| Variable | Required | Purpose |
+|---|---|---|
+| `LLM_API_KEY` | Yes | API key for the selected OpenAI-compatible provider |
+| `LLM_MODEL` | Yes | Chat model name, for example the model shown in `.env.example` |
+| `LLM_BASE_URL` | Provider-dependent | API base URL; use the sample Groq endpoint for Groq, or leave unset for OpenAI |
 
-## For Person 2 (RAG)
+Never commit `.env` or share its key. The embedding model (`sentence-transformers/all-MiniLM-L6-v2`) is downloaded locally on first use; it does not require an API key.
 
-Run from the project root, after `build_vector_db.py` has been run once:
+Put searchable, text-based college PDFs in `data/documents/`. The supplied documents are `academic_regulations.pdf`, `internship_guidelines.pdf`, and `student_faq.pdf`.
 
-    from src.retriever import search_documents, get_retriever
+## Run
 
-    results = search_documents("What is the attendance requirement?", k=3)
-    # each result: {"text", "source" (file name), "page" (starts at 1), "score"}
+Build or rebuild the Chroma index after adding or changing PDFs. This resets and recreates the configured collection:
 
-    retriever = get_retriever(k=3)   # LangChain retriever for a RAG chain
+```powershell
+python src\build_vector_db.py
+```
 
-Notes:
-- `score` is a distance: lower = more similar.
-- Show citations as `source` + `page`, e.g. "academic_regulations.pdf, Page 2".
-- Do not change the embedding model or collection name without rebuilding the database.
-- `vector_db/` is not committed to Git; every teammate runs `build_vector_db.py` themselves.
+Start the Streamlit interface:
 
-## Limitations
+```powershell
+streamlit run app.py
+```
 
-- Scanned (image-only) PDFs have no text layer and need OCR; the loader prints a warning for them.
-- Tables in PDFs may lose their layout when extracted.
+Useful checks and comparison scripts:
 
-## For Person 3 (LangGraph + Study Planner)
+```powershell
+python -m pytest tests -v
+python -m pytest tests/test_assistant.py tests/test_planner.py tests/test_person4.py -v
+python -m pytest tests/test_app.py -v
+python src\test_retrieval.py
+python run_test_report.py
+python compare_llm_vs_rag.py
+```
 
-Files: `src/planner.py`, `src/assistant.py`
+`run_test_report.py` writes `test_results.csv`; `compare_llm_vs_rag.py` writes `comparison_results.csv` and `comparison_report.md`. Live RAG checks require the vector database and LLM configuration. The generated `vector_db/` directory is local and should be rebuilt by each developer.
 
-- **Study planner (`src/planner.py`):** build `create_study_plan(subjects, exam_dates, hours_per_day)`. This is plain Python and does not depend on any other module, so it can be built and tested right away.
-- **LangGraph workflow (`src/assistant.py`):** route each student message to the right node: a document question (Person 2's `answer_question`), a study plan (`create_study_plan`), or a tool (Person 4). Expose `run_assistant(message, session_id)`, which is the single function the frontend calls.
-- Keep the `sources` list from document answers so the UI can show citations.
+`tests/test_assistant.py`, `tests/test_planner.py`, and `tests/test_person4.py` cover routing, schedule generation, tools, and memory. `tests/test_app.py` contains 15 end-to-end scenarios across direct questions, follow-ups, cited RAG answers, unknown questions, and multi-step study-plan requests. Those live cases need the configured LLM and built vector database.
 
-Agreed interfaces:
+## UI Screenshots
 
-    # Person 3
-    create_study_plan(subjects, exam_dates, hours_per_day) -> dict
-    run_assistant(message, session_id) -> {"reply": str, "sources": list}
+### Chat Assistant
 
-    # from Person 2
-    answer_question(question, chat_history=None) -> {"answer": str, "sources": [{"source": str, "page": int}]}
+![Chat Assistant UI](ui-chat.png)
 
-Until the other modules are ready, use a stub that returns a sample result in the same shape.
+### Study Planner
 
-## For Person 4 (External Tools + Conversation)
+![Study Planner UI](ui-study-planner.png)
 
-Files: `src/tools.py`, optionally `src/memory.py`
+### RAG vs Basic LLM
 
-- **Calculator:** `calculate_cgpa(grades_and_credits) -> float` and similar helpers. The grade points must match the college's real regulations once the real documents are added.
-- **Calendar:** simple helpers to add and list dates such as exams and deadlines.
-- **Chat memory:** store the conversation history per `session_id` so follow-up questions like "and what about labs?" work. Pass the history to Person 2's `answer_question(question, chat_history)`.
-- Write the tools as plain Python functions so Person 3 can plug them into the LangGraph workflow.
+![RAG vs Basic LLM UI](ui-rag-comparison.png)
 
-## For Person 5 (Frontend + Integration + Testing)
+## Project Structure
 
-Files: `app.py` (or a `frontend/` folder), `tests/`
+```text
+.
+├── app.py                    # Streamlit interface
+├── backend_api.py            # Frontend-facing backend functions
+├── compare_llm_vs_rag.py     # Basic LLM/RAG comparison and report generation
+├── run_test_report.py        # Scenario runner that writes test_results.csv
+├── requirements.txt
+├── data/
+│   └── documents/            # Source PDFs
+├── src/
+│   ├── assistant.py          # LangGraph state, routing, and nodes
+│   ├── build_vector_db.py    # Index builder
+│   ├── chat.py               # Command-line RAG chat
+│   ├── config.py             # Paths and indexing settings
+│   ├── document_loader.py    # PDF extraction and cleaning
+│   ├── embeddings.py         # Local embedding model
+│   ├── memory.py             # JSON-backed session conversation history
+│   ├── planner.py            # Deterministic study planner
+│   ├── prompts.py            # RAG grounding instructions
+│   ├── rag_chain.py          # Retrieval, prompt, and LLM answer
+│   ├── retriever.py          # Chroma search functions
+│   ├── test_rag.py           # RAG smoke check
+│   ├── test_retrieval.py     # Retrieval checks
+│   ├── text_splitter.py      # Recursive document chunking
+│   └── tools.py              # CGPA and calendar functions
+└── tests/
+    ├── test_app.py           # Document-grounded live scenarios
+    ├── test_assistant.py     # LangGraph routing tests
+    ├── test_person4.py       # Tools and memory tests
+    └── test_planner.py       # Planner tests
+```
 
-- **Frontend:** build the chat UI against `run_assistant(message, session_id)`. Use a mock version of that function until Person 3's real one exists:
+Runtime files such as `vector_db/`, `data/chat_memory.json`, and `data/calendar_events.json` are local data and are not source-controlled.
 
-      def run_assistant(message, session_id):
-          return {"reply": "Sample reply", "sources": [{"source": "academic_regulations.pdf", "page": 2}]}
+## Team Modules
 
-- **Citations:** show each source under the answer as `source, Page N`.
-- **Integration:** when the real modules are ready, replace the stubs and run the whole flow end to end.
-- **Testing:** write test questions that cover every module: document questions, study plan, CGPA calculation and follow-ups. Keep a short checklist for the demo.
-- **Demo:** make sure the vector database has been built (`python src\build_vector_db.py`) with the final college documents before presenting.
+| Member | Area | Main modules |
+|---|---|---|
+| Person 1 | Document processing and vector database | `src/config.py`, `src/document_loader.py`, `src/text_splitter.py`, `src/embeddings.py`, `src/build_vector_db.py`, `src/retriever.py` |
+| Person 2 | Retrieval-augmented generation | `src/rag_chain.py`, `src/prompts.py`, `src/test_rag.py` |
+| Person 3 | LangGraph workflow and study planner | `src/assistant.py`, `src/planner.py` |
+| Person 4 | External tools and conversation memory | `src/tools.py`, `src/memory.py` |
+| Person 5 | Frontend, integration, and testing | `app.py`, `backend_api.py`, `tests/`, `run_test_report.py`, `compare_llm_vs_rag.py` |
 
-## Team workflow (Git)
+## Notes and Limitations
 
-- Work on your own branch, for example `person2-rag`, `person3-langgraph`, `person4-tools`, `person5-ui`.
-- Each person owns their own files. Do not edit another person's file without telling them.
-- `requirements.txt` is shared: add your packages at the end and pull often.
-- Never commit API keys. Keep them in a `.env` file (already in `.gitignore`).
-- Merge into `main` through pull requests.
+- The current document set contains regulations, internship guidelines, and FAQs; no syllabus PDF is included yet.
+- Scanned/image-only PDFs need OCR. The loader warns when a page has no readable text, and tables may lose layout during extraction.
+- The default CGPA grade-point mapping in `src/tools.py` should be checked against official college rules.
+- Study-plan modification uses an LLM to update subjects, dates, and daily hours. Per-subject revision intensity is not represented by the current planner data model.
+- Conversation and calendar JSON files are local application storage, not a multi-user database.

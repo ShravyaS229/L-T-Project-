@@ -21,6 +21,22 @@ def format_context(chunks):
     return "\n\n".join(parts)
 
 
+def format_chat_history(chat_history):
+    """Format previous session messages for reference resolution only."""
+    if not chat_history:
+        return "No previous conversation."
+
+    messages = []
+    for message in chat_history:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role", "user")).title()
+        content = str(message.get("content", "")).strip()
+        if content:
+            messages.append(f"{role}: {content}")
+    return "\n".join(messages) or "No previous conversation."
+
+
 def retrieve_context(question, k=4):
     """Step 1: get relevant PDF chunks from Person 1's vector DB."""
     chunks = search_documents(question, k=k)
@@ -38,14 +54,18 @@ def get_client():
     return OpenAI(api_key=api_key, base_url=base_url)
 
 
-def ask_question(question, k=4):
+def ask_question(question, k=4, chat_history=None):
     """Full RAG pipeline. Returns {"answer": str, "sources": [str, ...]}."""
     chunks, context = retrieve_context(question, k=k)
 
     if not chunks:
         return {"answer": NOT_FOUND_MESSAGE, "sources": []}
 
-    prompt = RAG_PROMPT.format(context=context, question=question)
+    prompt = RAG_PROMPT.format(
+        context=context,
+        question=question,
+        chat_history=format_chat_history(chat_history),
+    )
 
     client = get_client()
     model = os.getenv("LLM_MODEL")

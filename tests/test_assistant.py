@@ -177,6 +177,50 @@ class TestRagRouting:
         assert "LLM_API_KEY" not in result["reply"]
 
 
+def test_exec_rag_passes_loaded_history(monkeypatch):
+    """[MOCKED] Session history loaded by the graph reaches the RAG call."""
+    from types import ModuleType
+
+    from src import assistant
+
+    received = {}
+    rag_module = ModuleType("src.rag_chain")
+
+    def fake_ask_question(question, k=4, chat_history=None):
+        received["question"] = question
+        received["chat_history"] = chat_history
+        return {"answer": "The requirement is 75%.", "sources": []}
+
+    rag_module.ask_question = fake_ask_question
+    monkeypatch.setitem(sys.modules, "src.rag_chain", rag_module)
+
+    history = [
+        {"role": "user", "content": "What is the attendance requirement?"},
+        {"role": "assistant", "content": "It is 75%."},
+    ]
+    state = {
+        "message": "What happens if I fall short?",
+        "history": history,
+        "reply": "",
+        "sources": [],
+    }
+
+    assistant._exec_rag(state)
+
+    assert received["question"] == state["message"]
+    assert received["chat_history"] == history
+    assert state["reply"] == "The requirement is 75%."
+
+
+def test_rag_prompt_is_langchain_prompt_template():
+    """The RAG prompt exposes context, history, and question variables."""
+    from src.prompts import RAG_PROMPT
+
+    assert {"context", "chat_history", "question"}.issubset(
+        set(RAG_PROMPT.input_variables)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Study planner routing
 # ---------------------------------------------------------------------------
